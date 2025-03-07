@@ -1,18 +1,21 @@
 public class MatchingEngine {
-
     private static final int MAX_TICKERS = 1024;
     private static final int MAX_ORDERS_PER_SIDE = 10000;
-
     /**
      * Storing 1024 ticker
      */
     private static final String[] tickerSymbols = new String[MAX_TICKERS];
 
     /**
-     * I asked Chatgpt and do some research online that which said maybe using volatile could *getting closer with the lock free situation.
+     * I asked Chatgpt and do some research online that which said maybe using volatile could 
+     * getting closer with the lock free situation without
      */
     private static final class Order {
-        volatile boolean active;  //True == still valid
+        final java.util.concurrent.atomic.AtomicBoolean active = 
+            new java.util.concurrent.atomic.AtomicBoolean(false); 
+            // True == still valid
+            // By using atomicboolean, I am able to protect them when there are 
+            // multiple threads running
         volatile float price;
         volatile int quantity;
     }
@@ -24,8 +27,12 @@ public class MatchingEngine {
     private static final class TickerBook {
         final Order[] buyOrders = new Order[MAX_ORDERS_PER_SIDE];
         final Order[] sellOrders = new Order[MAX_ORDERS_PER_SIDE];
-        volatile int buyCount = 0;
-        volatile int sellCount = 0;
+        final java.util.concurrent.atomic.AtomicInteger buyCount =
+            new java.util.concurrent.atomic.AtomicInteger(0);
+        final java.util.concurrent.atomic.AtomicInteger sellCount =
+            new java.util.concurrent.atomic.AtomicInteger(0);
+            // By using atomic int, I am able to protect them when there are 
+            // multiple threads running
 
         TickerBook() {
             for (int i = 0; i < MAX_ORDERS_PER_SIDE; i++) {
@@ -36,7 +43,7 @@ public class MatchingEngine {
     }
 
     private static final TickerBook[] orderBooks = new TickerBook[MAX_TICKERS];
-
+    //connect 
     static {
         for (int i = 0; i < MAX_TICKERS; i++) {
             orderBooks[i] = new TickerBook();
@@ -93,20 +100,26 @@ public class MatchingEngine {
         }
         TickerBook tb = orderBooks[idx];
         if ("Buy".equalsIgnoreCase(orderType)) {
-            int slot = tb.buyCount;  
+            int slot = tb.buyCount.getAndIncrement(); 
             if (slot < MAX_ORDERS_PER_SIDE) {
-                tb.buyOrders[slot].price = price;
-                tb.buyOrders[slot].quantity = quantity;
-                tb.buyOrders[slot].active = true;
-                tb.buyCount = slot + 1;
+                Order od = tb.buyOrders[slot];
+                od.price = price;
+                od.quantity = quantity;
+                od.active.set(true); 
+                //tb.buyCount = slot + 1;
+            }else{
+                tb.buyCount.decrementAndGet(); 
             }
         } else if ("Sell".equalsIgnoreCase(orderType)) {
-            int slot = tb.sellCount;
+            int slot = tb.sellCount.getAndIncrement();
             if (slot < MAX_ORDERS_PER_SIDE) {
-                tb.sellOrders[slot].price = price;
-                tb.sellOrders[slot].quantity = quantity;
-                tb.sellOrders[slot].active = true;
-                tb.sellCount = slot + 1;
+                Order od = tb.sellOrders[slot];
+                od.price = price;
+                od.quantity = quantity;
+                od.active.set(true);
+                //tb.sellCount = slot + 1;
+            } else {
+                tb.sellCount.decrementAndGet();
             }
         }
     }
@@ -126,10 +139,10 @@ public class MatchingEngine {
 
         float bestBuyPrice = -1.0f;
         int bestBuyIndex = -1;
-        int bc = tb.buyCount;  
+        int bc = tb.buyCount.get();
         for (int i = 0; i < bc; i++) {
             Order od = tb.buyOrders[i];
-            if (od.active) {
+            if (od.active.get()) {
                 float p = od.price;
                 if (p > bestBuyPrice) {
                     bestBuyPrice = p;
@@ -140,10 +153,10 @@ public class MatchingEngine {
 
         float bestSellPrice = Float.MAX_VALUE;
         int bestSellIndex = -1;
-        int sc = tb.sellCount;
+        int sc = tb.sellCount.get();
         for (int i = 0; i < sc; i++) {
             Order od = tb.sellOrders[i];
-            if (od.active) {
+            if (od.active.get()) {
                 float p = od.price;
                 if (p < bestSellPrice) {
                     bestSellPrice = p;
@@ -156,32 +169,15 @@ public class MatchingEngine {
             if (bestBuyPrice >= bestSellPrice) {
                 Order buyOd = tb.buyOrders[bestBuyIndex];
                 Order sellOd = tb.sellOrders[bestSellIndex];
-                buyOd.active = false;
-                sellOd.active = false;
-                tb.buyCount = tb.buyCount - 1;
-                tb.sellCount = tb.sellCount - 1;
-                System.out.println(
-                        "Matched: BUY(" + buyOd.price + ") vs SELL(" + sellOd.price
-                                + ") for " + tickerSymbol);
+                boolean bOk = buyOd.active.compareAndSet(true, false);
+                boolean sOk = sellOd.active.compareAndSet(true, false);
+                if (bOk && sOk) {
+                    tb.buyCount.decrementAndGet();
+                    tb.sellCount.decrementAndGet();
+                    System.out.println("Matched: BUY(" + buyOd.price
+                        + ") vs SELL(" + sellOd.price + ") for " + tickerSymbol);
+                }
             }
         }
-    }
-
-
-    public static void main(String[] args) {
-        registerTickerSymbol("TKR0001");
-        registerTickerSymbol("ABC");
-        addOrder("Buy",  "TKR0001", 100, 95.5f);
-        addOrder("Buy",  "TKR0001", 200, 90.0f);
-        addOrder("Sell", "TKR0001", 50,  92.0f);
-        addOrder("Sell", "TKR0001", 80,  99.0f);
-
-        matchOrder("TKR0001");
-
-        matchOrder("TKR0001");
-
-        addOrder("Buy",  "ABC", 10,  102.0f);
-        addOrder("Sell", "ABC", 5,   110.0f);
-        matchOrder("ABC");
     }
 }
