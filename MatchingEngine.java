@@ -7,8 +7,9 @@ public class MatchingEngine {
     private static final String[] tickerSymbols = new String[MAX_TICKERS];
 
     /**
-     * I asked Chatgpt and do some research online that which said maybe using volatile could 
-     * getting closer with the lock free situation without
+     * I asked LLM and do some research online that which said maybe using volatile, atomic
+     * boolean and int could getting closer with the lock free situation without import 
+     * anything else.
      */
     private static final class Order {
         final java.util.concurrent.atomic.AtomicBoolean active = 
@@ -70,10 +71,12 @@ public class MatchingEngine {
      * Adding new tickertickerSymbol or returning index
      */
     private static int registerTickerSymbol(String tickerSymbol) {
+        // Check if the ticker is already registered and return its index if so
         int idx = getTickerIndex(tickerSymbol);
         if (idx >= 0) {
             return idx; 
         }
+        // If not found, loop for the first empty slot and register the ticker
         for (int i = 0; i < MAX_TICKERS; i++) {
             if (tickerSymbols[i] == null) {
                 tickerSymbols[i] = tickerSymbol;
@@ -100,6 +103,7 @@ public class MatchingEngine {
         }
         TickerBook tb = orderBooks[idx];
         if ("Buy".equalsIgnoreCase(orderType)) {
+            // For a Buy order, get the next available slot using an atomic increment
             int slot = tb.buyCount.getAndIncrement(); 
             if (slot < MAX_ORDERS_PER_SIDE) {
                 Order od = tb.buyOrders[slot];
@@ -136,7 +140,7 @@ public class MatchingEngine {
             return;
         }
         TickerBook tb = orderBooks[idx];
-
+        // Find the best (highest) active Buy order
         float bestBuyPrice = -1.0f;
         int bestBuyIndex = -1;
         int bc = tb.buyCount.get();
@@ -164,7 +168,7 @@ public class MatchingEngine {
                 }
             }
         }
-
+        // If a valid Buy && Sell order are found and prices allow a match, we process the trade
         if (bestBuyIndex >= 0 && bestSellIndex >= 0) {
             if (bestBuyPrice >= bestSellPrice) {
                 Order buyOd = tb.buyOrders[bestBuyIndex];
